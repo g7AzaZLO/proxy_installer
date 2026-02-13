@@ -399,7 +399,7 @@ logoutput: syslog
 internal: $iface port = $port
 external: $iface
 
-clientmethod: username
+clientmethod: none
 socksmethod: username
 
 user.privileged: root
@@ -546,7 +546,11 @@ show_dante_status() {
   local service
   service="$(resolve_dante_service)"
   systemctl status "$service" --no-pager || true
-  fail2ban-client status danted || true
+  if fail2ban-client status 2>/dev/null | awk -F: '/Jail list/ {print $2}' | tr ',' '\n' | awk '{$1=$1;print}' | grep -Fxq "danted"; then
+    fail2ban-client status danted || true
+  else
+    echo "fail2ban jail 'danted' пока не создан (создаётся в шаге установки SOCKS5)."
+  fi
 }
 
 restart_dante_service() {
