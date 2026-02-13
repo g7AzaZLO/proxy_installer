@@ -14,6 +14,7 @@ MAX_PASSWORD_LEN=128
 DANTE_APP="socks5-manager"
 DANTE_CONF="/etc/danted.conf"
 DANTE_SERVICE="danted"
+DANTE_USERS_FILE="/etc/proxy-installer/dante-users.list"
 SCRIPT_RUNNING=1
 
 http_log() { echo "[http-manager] $*"; }
@@ -187,6 +188,11 @@ ensure_squid_service() {
   systemctl enable "$SQUID_SERVICE"
 }
 
+restart_http_service() {
+  ensure_squid_service
+  show_http_status
+}
+
 create_or_update_http_user() {
   local username password
   username="$(read_proxy_login)"
@@ -246,6 +252,15 @@ show_http_status() {
   systemctl status "$SQUID_SERVICE" --no-pager || true
 }
 
+list_http_users() {
+  if [[ ! -r "$SQUID_PASSWD" ]]; then
+    echo "Файл пользователей Squid не найден: $SQUID_PASSWD"
+    return
+  fi
+  echo "Пользователи Squid:"
+  awk -F: '{print "- " $1}' "$SQUID_PASSWD"
+}
+
 squid_menu() {
   while true; do
     local choice
@@ -255,6 +270,8 @@ squid_menu() {
       "Удалить пользователя" \
       "Сменить порт" \
       "Статус" \
+      "Рестарт сервиса" \
+      "Список пользователей" \
       "Назад")"
 
     case "$choice" in
@@ -263,6 +280,8 @@ squid_menu() {
       "Удалить пользователя") delete_http_user ;;
       "Сменить порт") change_http_port ;;
       "Статус") show_http_status ;;
+      "Рестарт сервиса") restart_http_service ;;
+      "Список пользователей") list_http_users ;;
       "Назад") return ;;
       *) echo "Неверный выбор." ;;
     esac
@@ -307,6 +326,29 @@ resolve_dante_service() {
     return
   fi
   echo "$DANTE_SERVICE"
+}
+
+ensure_dante_users_store() {
+  mkdir -p "$(dirname "$DANTE_USERS_FILE")"
+  touch "$DANTE_USERS_FILE"
+  chmod 600 "$DANTE_USERS_FILE"
+}
+
+register_dante_user() {
+  local username="$1"
+  ensure_dante_users_store
+  if ! grep -Fxq "$username" "$DANTE_USERS_FILE"; then
+    echo "$username" >> "$DANTE_USERS_FILE"
+  fi
+}
+
+unregister_dante_user() {
+  local username="$1"
+  ensure_dante_users_store
+  local temp_file
+  temp_file="$(mktemp)"
+  grep -Fxv "$username" "$DANTE_USERS_FILE" > "$temp_file" || true
+  mv "$temp_file" "$DANTE_USERS_FILE"
 }
 
 gen_password() {
@@ -435,6 +477,7 @@ create_or_update_dante_user() {
   fi
 
   echo "$username:$password" | chpasswd
+  register_dante_user "$username"
 
   ip="$(get_primary_ip)"
   port="$(get_dante_port)"
@@ -458,6 +501,7 @@ delete_dante_user() {
   local username
   username="$(read_nonempty "Логин для удаления: ")"
   userdel "$username" || true
+  unregister_dante_user "$username"
   dante_log "Удалён (если существовал)."
 }
 
@@ -505,6 +549,38 @@ show_dante_status() {
   fail2ban-client status danted || true
 }
 
+restart_dante_service() {
+  local service
+  service="$(resolve_dante_service)"
+  systemctl restart "$service"
+  show_dante_status
+}
+
+list_dante_users() {
+  ensure_dante_users_store
+  if [[ ! -s "$DANTE_USERS_FILE" ]]; then
+    echo "Список пользователей пуст."
+    return
+  fi
+
+  echo "Пользователи SOCKS5:"
+  while IFS= read -r username; do
+    [[ -z "$username" ]] && continue
+    if id "$username" &>/dev/null; then
+      echo "- $username"
+    else
+      echo "- $username (не существует в системе)"
+    fi
+  done < "$DANTE_USERS_FILE"
+}
+
+show_dante_diagnostics() {
+  local service
+  service="$(resolve_dante_service)"
+  echo "Последние логи $service:"
+  journalctl -u "$service" -n 60 --no-pager || true
+}
+
 dante_menu() {
   while true; do
     local choice
@@ -514,6 +590,9 @@ dante_menu() {
       "Удалить пользователя" \
       "Сменить порт" \
       "Статус" \
+      "Рестарт сервиса" \
+      "Список пользователей" \
+      "Диагностика (логи)" \
       "Назад")"
 
     case "$choice" in
@@ -522,6 +601,9 @@ dante_menu() {
       "Удалить пользователя") delete_dante_user ;;
       "Сменить порт") change_dante_port ;;
       "Статус") show_dante_status ;;
+      "Рестарт сервиса") restart_dante_service ;;
+      "Список пользователей") list_dante_users ;;
+      "Диагностика (логи)") show_dante_diagnostics ;;
       "Назад") return ;;
       *) echo "Неверный выбор." ;;
     esac
