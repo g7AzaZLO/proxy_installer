@@ -6,6 +6,10 @@ HTTP_PROXY_USER="proxyuser"
 SQUID_CONF="/etc/squid/squid.conf"
 SQUID_PASSWD="/etc/squid/passwd"
 SQUID_SERVICE="squid"
+MIN_PROXY_PORT=1024
+MAX_PROXY_PORT=65535
+MIN_PASSWORD_LEN=12
+MAX_PASSWORD_LEN=128
 
 DANTE_APP="socks5-manager"
 DANTE_CONF="/etc/danted.conf"
@@ -129,10 +133,29 @@ read_port() {
   local prompt="$1"
   local port=""
 
-  port="$(read_nonempty "$prompt")"
-  [[ "$port" =~ ^[0-9]+$ ]] || err "Порт должен быть числом."
-  [[ "$port" -ge 1024 && "$port" -le 65535 ]] || err "Порт должен быть 1024..65535."
+  port="$(read_nonempty "${prompt} [${MIN_PROXY_PORT}-${MAX_PROXY_PORT}]: ")"
+  [[ "$port" =~ ^[0-9]+$ ]] || err "Порт должен быть числом в диапазоне ${MIN_PROXY_PORT}-${MAX_PROXY_PORT}."
+  [[ "$port" -ge "$MIN_PROXY_PORT" && "$port" -le "$MAX_PROXY_PORT" ]] || err "Порт должен быть в диапазоне ${MIN_PROXY_PORT}-${MAX_PROXY_PORT}."
   echo "$port"
+}
+
+read_proxy_login() {
+  local username=""
+  while true; do
+    username="$(read_nonempty "Логин [3-32, латиница/цифры/._-]: ")"
+    if [[ "$username" =~ ^[a-zA-Z0-9._-]{3,32}$ ]]; then
+      echo "$username"
+      return
+    fi
+    echo "Неверный логин. Разрешено: латиница, цифры, '.', '_', '-'. Длина: 3-32."
+  done
+}
+
+validate_password_length() {
+  local password="$1"
+  local pass_len=0
+  pass_len="${#password}"
+  [[ "$pass_len" -ge "$MIN_PASSWORD_LEN" && "$pass_len" -le "$MAX_PASSWORD_LEN" ]] || err "Длина пароля должна быть ${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN} символов."
 }
 
 install_http_pkgs() {
@@ -166,7 +189,7 @@ ensure_squid_service() {
 
 create_or_update_http_user() {
   local username password
-  username="$(read_nonempty "Логин: ")"
+  username="$(read_proxy_login)"
   password="$(choose_password)"
 
   touch "$SQUID_PASSWD"
@@ -191,7 +214,7 @@ delete_http_user() {
 
 install_http_squid() {
   local proxy_pass server_ip port
-  port="$(read_port "Порт HTTP-прокси (например 8080): ")"
+  port="$(read_port "Порт HTTP-прокси (например 8080)")"
   proxy_pass="$(openssl rand -base64 12 | tr -d '/=+' | cut -c1-12)"
   server_ip="$(curl -s ifconfig.me)"
 
@@ -213,7 +236,7 @@ install_http_squid() {
 
 change_http_port() {
   local port
-  port="$(read_port "Новый порт для Squid: ")"
+  port="$(read_port "Новый порт для Squid")"
   render_squid_conf "$port"
   ensure_squid_service
   http_log "Порт обновлён, сервис перезапущен."
@@ -289,13 +312,16 @@ choose_password() {
 
   case "$mode" in
     "Ввести вручную")
-      read_secret "Пароль (ввод скрыт): "
+      local manual_password
+      manual_password="$(read_secret "Пароль (ввод скрыт, ${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN} символов): ")"
+      validate_password_length "$manual_password"
+      echo "$manual_password"
       ;;
     "Автосгенерировать (рекомендую)")
       local len
-      len="$(read_nonempty "Длина пароля (например 18): ")"
-      [[ "$len" =~ ^[0-9]+$ ]] || err "Длина должна быть числом."
-      [[ "$len" -ge 12 ]] || err "Длина должна быть >= 12."
+      len="$(read_nonempty "Длина пароля [${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN}] (рекомендую 18): ")"
+      [[ "$len" =~ ^[0-9]+$ ]] || err "Длина должна быть числом в диапазоне ${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN}."
+      [[ "$len" -ge "$MIN_PASSWORD_LEN" && "$len" -le "$MAX_PASSWORD_LEN" ]] || err "Длина должна быть в диапазоне ${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN}."
       gen_password "$len"
       ;;
     *)
@@ -381,7 +407,7 @@ EOF
 
 create_or_update_dante_user() {
   local username password
-  username="$(read_nonempty "Логин: ")"
+  username="$(read_proxy_login)"
   password="$(choose_password)"
 
   if id "$username" &>/dev/null; then
@@ -413,7 +439,7 @@ install_dante_flow() {
   install_dante_pkgs
 
   iface="$(get_iface)"
-  port="$(read_port "Порт (например 31827): ")"
+  port="$(read_port "Порт SOCKS5 (например 31827)")"
 
   render_dante_conf "$iface" "$port"
   create_or_update_dante_user
@@ -435,7 +461,7 @@ install_dante_flow() {
 change_dante_port() {
   local iface port
   iface="$(get_iface)"
-  port="$(read_port "Новый порт: ")"
+  port="$(read_port "Новый порт SOCKS5")"
 
   render_dante_conf "$iface" "$port"
   ufw allow "$port/tcp" || true
