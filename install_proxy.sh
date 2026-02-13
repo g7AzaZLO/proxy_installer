@@ -16,7 +16,10 @@ dante_log() { echo "[$DANTE_APP] $*"; }
 err() { echo "[proxy-installer] ERROR: $*" >&2; exit 1; }
 
 require_root() {
-  [[ "${EUID:-$(id -u)}" -ne 0 ]] && err "Запусти через sudo."
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    err "Запусти через sudo."
+  fi
+  return 0
 }
 
 read_nonempty() {
