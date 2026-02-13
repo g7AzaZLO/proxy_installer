@@ -10,10 +10,26 @@ SQUID_SERVICE="squid"
 DANTE_APP="socks5-manager"
 DANTE_CONF="/etc/danted.conf"
 DANTE_SERVICE="sockd"
+SCRIPT_RUNNING=1
 
 http_log() { echo "[http-manager] $*"; }
 dante_log() { echo "[$DANTE_APP] $*"; }
-err() { echo "[proxy-installer] ERROR: $*" >&2; exit 1; }
+is_sourced() { [[ "${BASH_SOURCE[0]}" != "$0" ]]; }
+terminate_script() {
+  local code="$1"
+  if is_sourced; then
+    return "$code"
+  fi
+  exit "$code"
+}
+err() {
+  echo "[proxy-installer] ERROR: $*" >&2
+  terminate_script 1
+}
+stop_script() {
+  SCRIPT_RUNNING=0
+}
+
 
 require_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
@@ -62,7 +78,7 @@ menu_choose_option() {
 
   (( total > 0 )) || err "Меню пустое."
 
-  if [[ ! -t 0 || ! -t 1 ]]; then
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
     echo >&2
     echo "$title" >&2
     local i=0
@@ -90,9 +106,9 @@ menu_choose_option() {
     done
     echo "Используй ↑/↓ и Enter." >&2
 
-    IFS= read -rsn1 key
+    IFS= read -rsn1 key < /dev/tty
     if [[ "$key" == $'\x1b' ]]; then
-      IFS= read -rsn2 -t 0.1 key || true
+      IFS= read -rsn2 -t 0.1 key < /dev/tty || true
       case "$key" in
         "[A") selected=$(( (selected - 1 + total) % total )) ;;
         "[B") selected=$(( (selected + 1) % total )) ;;
@@ -451,13 +467,13 @@ main_menu() {
   case "$choice" in
     "HTTP (Squid)") squid_menu ;;
     "SOCKS5 (Dante)") dante_menu ;;
-    "Выход") exit 0 ;;
+    "Выход") stop_script ;;
     *) echo "Неверный выбор." ;;
   esac
 }
 
 require_root
 
-while true; do
+while (( SCRIPT_RUNNING )); do
   main_menu
 done

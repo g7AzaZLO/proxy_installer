@@ -43,7 +43,7 @@
 ### Вариант 1: one-liner
 
 ```bash
-. <(wget -qO- https://raw.githubusercontent.com/g7AzaZLO/proxy_installer/main/install_proxy.sh)
+bash <(wget -qO- https://raw.githubusercontent.com/g7AzaZLO/proxy_installer/main/install_proxy.sh)
 ```
 
 ### Вариант 2: локально из репозитория
