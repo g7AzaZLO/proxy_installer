@@ -442,10 +442,15 @@ setup_ufw() {
 
 setup_fail2ban() {
   local port="$1"
+  local service_name=""
+  local unit_name=""
+
+  service_name="$(resolve_dante_service)"
+  unit_name="${service_name}.service"
 
   cat > /etc/fail2ban/filter.d/danted.conf <<'EOF'
 [Definition]
-failregex = .*sockd.*(authentication failed|auth failed).*
+failregex = .*(sockd|danted).*(authentication failed|auth failed).*
 ignoreregex =
 EOF
 
@@ -455,6 +460,7 @@ enabled = true
 port = $port
 filter = danted
 backend = systemd
+journalmatch = _SYSTEMD_UNIT=$unit_name
 maxretry = 5
 findtime = 600
 bantime = 3600
@@ -462,6 +468,23 @@ EOF
 
   systemctl enable fail2ban
   systemctl restart fail2ban
+  sleep 1
+
+  if ! fail2ban-client ping >/dev/null 2>&1; then
+    echo "Fail2ban не запустился. Диагностика:" >&2
+    systemctl status fail2ban --no-pager || true
+    journalctl -u fail2ban -n 80 --no-pager || true
+    err "Fail2ban не удалось запустить."
+  fi
+
+  fail2ban-client reload || true
+
+  if ! fail2ban-client status danted >/dev/null 2>&1; then
+    echo "Fail2ban запущен, но jail 'danted' не создан. Диагностика:" >&2
+    fail2ban-client status || true
+    journalctl -u fail2ban -n 80 --no-pager || true
+    err "Jail 'danted' не активировался."
+  fi
 }
 
 create_or_update_dante_user() {
@@ -546,10 +569,14 @@ show_dante_status() {
   local service
   service="$(resolve_dante_service)"
   systemctl status "$service" --no-pager || true
+  if ! fail2ban-client ping >/dev/null 2>&1; then
+    echo "fail2ban не запущен."
+    return
+  fi
   if fail2ban-client status 2>/dev/null | awk -F: '/Jail list/ {print $2}' | tr ',' '\n' | awk '{$1=$1;print}' | grep -Fxq "danted"; then
     fail2ban-client status danted || true
   else
-    echo "fail2ban jail 'danted' пока не создан (создаётся в шаге установки SOCKS5)."
+    echo "fail2ban запущен, но jail 'danted' не найден."
   fi
 }
 
