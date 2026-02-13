@@ -280,6 +280,23 @@ get_iface() {
   echo "${iface:-eth0}"
 }
 
+get_primary_ip() {
+  local ip=""
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  if [[ -z "$ip" ]]; then
+    ip="$(curl -fsS ifconfig.me 2>/dev/null || true)"
+  fi
+  echo "${ip:-N/A}"
+}
+
+get_dante_port() {
+  local port=""
+  if [[ -r "$DANTE_CONF" ]]; then
+    port="$(awk '/^internal:/ {for (i = 1; i <= NF; i++) if ($i == "=") {print $(i + 1); exit}}' "$DANTE_CONF" || true)"
+  fi
+  echo "${port:-N/A}"
+}
+
 resolve_dante_service() {
   if systemctl cat danted.service >/dev/null 2>&1; then
     echo "danted"
@@ -406,7 +423,7 @@ EOF
 }
 
 create_or_update_dante_user() {
-  local username password
+  local username password ip port
   username="$(read_proxy_login)"
   password="$(choose_password)"
 
@@ -419,10 +436,20 @@ create_or_update_dante_user() {
 
   echo "$username:$password" | chpasswd
 
+  ip="$(get_primary_ip)"
+  port="$(get_dante_port)"
+
   echo
   echo "======= ДАННЫЕ ДОСТУПА ======="
   echo "Логин:   $username"
   echo "Пароль:  $password"
+  echo "IP:      $ip"
+  echo "Порт:    $port"
+  if [[ "$port" != "N/A" && "$ip" != "N/A" ]]; then
+    echo "SOCKS5:  socks5://$username:$password@$ip:$port"
+  else
+    echo "SOCKS5:  недоступно (сначала выполни 'Установить/настроить SOCKS5')"
+  fi
   echo "=============================="
   echo
 }
