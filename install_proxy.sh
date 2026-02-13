@@ -462,6 +462,18 @@ banaction_allports = ufw
 EOF
 }
 
+recover_fail2ban_runtime() {
+  local ts=""
+  ts="$(date +%Y%m%d%H%M%S)"
+
+  systemctl stop fail2ban || true
+  rm -f /var/run/fail2ban/fail2ban.sock || true
+
+  if [[ -f /var/lib/fail2ban/fail2ban.sqlite3 ]]; then
+    mv /var/lib/fail2ban/fail2ban.sqlite3 "/var/lib/fail2ban/fail2ban.sqlite3.bak.${ts}" || true
+  fi
+}
+
 setup_fail2ban() {
   local port="$1"
   local service_name=""
@@ -494,7 +506,7 @@ EOF
   systemctl restart fail2ban
 
   if ! wait_for_fail2ban; then
-    rm -f /var/run/fail2ban/fail2ban.sock || true
+    recover_fail2ban_runtime
     configure_fail2ban_defaults
     systemctl restart fail2ban || true
   fi
@@ -503,6 +515,10 @@ EOF
     echo "Fail2ban не запустился. Диагностика:" >&2
     systemctl status fail2ban --no-pager || true
     journalctl -u fail2ban -n 80 --no-pager || true
+    if [[ -f /var/log/fail2ban.log ]]; then
+      echo "Последние строки /var/log/fail2ban.log:" >&2
+      sed -n '1,200p' /var/log/fail2ban.log || true
+    fi
     fail2ban-client -d 2>&1 | sed -n '1,200p' || true
     err "Fail2ban не удалось запустить."
   fi
