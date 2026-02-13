@@ -290,7 +290,7 @@ squid_menu() {
 
 install_dante_pkgs() {
   apt-get update -y
-  DEBIAN_FRONTEND=noninteractive apt-get install -y dante-server ufw fail2ban
+  DEBIAN_FRONTEND=noninteractive apt-get install -y dante-server ufw fail2ban python3-systemd
 }
 
 get_iface() {
@@ -471,9 +471,16 @@ EOF
   sleep 1
 
   if ! fail2ban-client ping >/dev/null 2>&1; then
+    rm -f /var/run/fail2ban/fail2ban.sock || true
+    systemctl restart fail2ban || true
+    sleep 1
+  fi
+
+  if ! fail2ban-client ping >/dev/null 2>&1; then
     echo "Fail2ban не запустился. Диагностика:" >&2
     systemctl status fail2ban --no-pager || true
     journalctl -u fail2ban -n 80 --no-pager || true
+    fail2ban-client -d 2>&1 | sed -n '1,200p' || true
     err "Fail2ban не удалось запустить."
   fi
 
