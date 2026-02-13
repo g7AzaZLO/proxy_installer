@@ -440,6 +440,28 @@ setup_ufw() {
   ufw allow "$port/tcp"
 }
 
+wait_for_fail2ban() {
+  local attempts=10
+  local i=1
+  while [[ "$i" -le "$attempts" ]]; do
+    if fail2ban-client ping >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+configure_fail2ban_defaults() {
+  cat > /etc/fail2ban/jail.local <<'EOF'
+[DEFAULT]
+backend = systemd
+banaction = ufw
+banaction_allports = ufw
+EOF
+}
+
 setup_fail2ban() {
   local port="$1"
   local service_name=""
@@ -461,22 +483,23 @@ port = $port
 filter = danted
 backend = systemd
 journalmatch = _SYSTEMD_UNIT=$unit_name
+action = ufw
 maxretry = 5
 findtime = 600
 bantime = 3600
 EOF
 
+  configure_fail2ban_defaults
   systemctl enable fail2ban
   systemctl restart fail2ban
-  sleep 1
 
-  if ! fail2ban-client ping >/dev/null 2>&1; then
+  if ! wait_for_fail2ban; then
     rm -f /var/run/fail2ban/fail2ban.sock || true
+    configure_fail2ban_defaults
     systemctl restart fail2ban || true
-    sleep 1
   fi
 
-  if ! fail2ban-client ping >/dev/null 2>&1; then
+  if ! wait_for_fail2ban; then
     echo "Fail2ban не запустился. Диагностика:" >&2
     systemctl status fail2ban --no-pager || true
     journalctl -u fail2ban -n 80 --no-pager || true
