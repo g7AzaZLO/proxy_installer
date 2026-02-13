@@ -484,8 +484,7 @@ setup_fail2ban() {
 
   cat > /etc/fail2ban/filter.d/danted.conf <<'EOF'
 [Definition]
-failregex = ^.*(?:sockd|danted).*(?:authentication failed|auth failed).*(?:from|client|src)[^0-9a-fA-F:.]*<HOST>.*$
-            ^.*(?:sockd|danted).*(?:from|client|src)[^0-9a-fA-F:.]*<HOST>.*(?:authentication failed|auth failed).*$ 
+failregex = <HOST>\S* .* (?:authentication failed|auth failed)
 ignoreregex =
 EOF
 
