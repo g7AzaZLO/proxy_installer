@@ -63,11 +63,11 @@ menu_choose_option() {
   (( total > 0 )) || err "Меню пустое."
 
   if [[ ! -t 0 || ! -t 1 ]]; then
-    echo
-    echo "$title"
+    echo >&2
+    echo "$title" >&2
     local i=0
     for i in "${!options[@]}"; do
-      printf "%d) %s\n" "$((i + 1))" "${options[$i]}"
+      printf "%d) %s\n" "$((i + 1))" "${options[$i]}" >&2
     done
     local fallback
     fallback="$(read_nonempty "Выбор [1-${total}]: ")"
@@ -78,17 +78,17 @@ menu_choose_option() {
   fi
 
   while true; do
-    echo
-    echo "$title"
+    echo >&2
+    echo "$title" >&2
     local i=0
     for i in "${!options[@]}"; do
       if [[ "$i" -eq "$selected" ]]; then
-        printf "  \033[7m> %s\033[0m\n" "${options[$i]}"
+        printf "  \033[7m> %s\033[0m\n" "${options[$i]}" >&2
       else
-        printf "    %s\n" "${options[$i]}"
+        printf "    %s\n" "${options[$i]}" >&2
       fi
     done
-    echo "Используй ↑/↓ и Enter."
+    echo "Используй ↑/↓ и Enter." >&2
 
     IFS= read -rsn1 key
     if [[ "$key" == $'\x1b' ]]; then
@@ -98,14 +98,14 @@ menu_choose_option() {
         "[B") selected=$(( (selected + 1) % total )) ;;
       esac
     elif [[ -z "$key" || "$key" == $'\n' ]]; then
-      printf "\033[%dA" "$((total + 3))"
-      printf "\033[J"
+      printf "\033[%dA" "$((total + 3))" >&2
+      printf "\033[J" >&2
       echo "${options[$selected]}"
       return
     fi
 
-    printf "\033[%dA" "$((total + 3))"
-    printf "\033[J"
+    printf "\033[%dA" "$((total + 3))" >&2
+    printf "\033[J" >&2
   done
 }
 
