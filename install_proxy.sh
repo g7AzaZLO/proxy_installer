@@ -9,7 +9,7 @@ SQUID_SERVICE="squid"
 
 DANTE_APP="socks5-manager"
 DANTE_CONF="/etc/danted.conf"
-DANTE_SERVICE="sockd"
+DANTE_SERVICE="danted"
 SCRIPT_RUNNING=1
 
 http_log() { echo "[http-manager] $*"; }
@@ -257,6 +257,18 @@ get_iface() {
   echo "${iface:-eth0}"
 }
 
+resolve_dante_service() {
+  if systemctl cat danted.service >/dev/null 2>&1; then
+    echo "danted"
+    return
+  fi
+  if systemctl cat sockd.service >/dev/null 2>&1; then
+    echo "sockd"
+    return
+  fi
+  echo "$DANTE_SERVICE"
+}
+
 gen_password() {
   local length="$1"
 
@@ -328,8 +340,10 @@ EOF
 }
 
 ensure_dante_service() {
-  systemctl enable "$DANTE_SERVICE"
-  systemctl restart "$DANTE_SERVICE"
+  local service
+  service="$(resolve_dante_service)"
+  systemctl enable "$service"
+  systemctl restart "$service"
 }
 
 setup_ufw() {
@@ -425,12 +439,16 @@ change_dante_port() {
 
   render_dante_conf "$iface" "$port"
   ufw allow "$port/tcp" || true
-  systemctl restart "$DANTE_SERVICE"
+  local service
+  service="$(resolve_dante_service)"
+  systemctl restart "$service"
   dante_log "Порт обновлён, сервис перезапущен."
 }
 
 show_dante_status() {
-  systemctl status "$DANTE_SERVICE" --no-pager || true
+  local service
+  service="$(resolve_dante_service)"
+  systemctl status "$service" --no-pager || true
   fail2ban-client status danted || true
 }
 
