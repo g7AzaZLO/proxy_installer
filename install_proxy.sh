@@ -219,13 +219,15 @@ delete_http_user() {
 }
 
 install_http_squid() {
-  local proxy_pass server_ip port
+  local old_port proxy_pass server_ip port
+  old_port="$(get_squid_port)"
   port="$(read_port "Порт HTTP-прокси (например 8080)")"
-  proxy_pass="$(openssl rand -base64 12 | tr -d '/=+' | cut -c1-12)"
+  proxy_pass="$(gen_password 12)"
   server_ip="$(curl -s ifconfig.me)"
 
   install_http_pkgs
   render_squid_conf "$port"
+  sync_managed_port "$old_port" "$port" "squid"
 
   touch "$SQUID_PASSWD"
   chmod 640 "$SQUID_PASSWD"
@@ -241,9 +243,11 @@ install_http_squid() {
 }
 
 change_http_port() {
-  local port
+  local old_port port
+  old_port="$(get_squid_port)"
   port="$(read_port "Новый порт для Squid")"
   render_squid_conf "$port"
+  sync_managed_port "$old_port" "$port" "squid"
   ensure_squid_service
   http_log "Порт обновлён, сервис перезапущен."
 }
@@ -308,12 +312,180 @@ get_primary_ip() {
   echo "${ip:-N/A}"
 }
 
+get_squid_port() {
+  local port=""
+  if [[ -r "$SQUID_CONF" ]]; then
+    port="$(awk '/^http_port[[:space:]]+/ {print $2; exit}' "$SQUID_CONF" || true)"
+  fi
+  echo "${port:-N/A}"
+}
+
 get_dante_port() {
   local port=""
   if [[ -r "$DANTE_CONF" ]]; then
     port="$(awk '/^internal:/ {for (i = 1; i <= NF; i++) if ($i == "=") {print $(i + 1); exit}}' "$DANTE_CONF" || true)"
   fi
   echo "${port:-N/A}"
+}
+
+ufw_available() {
+  command -v ufw >/dev/null 2>&1
+}
+
+ufw_is_active() {
+  ufw status 2>/dev/null | grep -qi '^Status: active'
+}
+
+extract_socket_port() {
+  local socket="$1"
+  local port="${socket##*:}"
+  [[ "$port" =~ ^[0-9]+$ ]] && echo "$port"
+}
+
+list_listening_ports() {
+  local protocol="$1"
+  local ss_args=()
+
+  case "$protocol" in
+    tcp) ss_args=(-H -ltn) ;;
+    udp) ss_args=(-H -lun) ;;
+    *) return 0 ;;
+  esac
+
+  if ! command -v ss >/dev/null 2>&1; then
+    return 0
+  fi
+
+  ss "${ss_args[@]}" 2>/dev/null \
+    | awk '{print $(NF-1)}' \
+    | while IFS= read -r socket; do
+        extract_socket_port "$socket"
+      done \
+    | sort -un
+}
+
+list_ssh_ports() {
+  local ports=""
+
+  if command -v sshd >/dev/null 2>&1; then
+    ports="$(sshd -T 2>/dev/null | awk '/^port / {print $2}' | sort -un || true)"
+  fi
+
+  if [[ -n "$ports" ]]; then
+    echo "$ports"
+    return
+  fi
+
+  echo "22"
+}
+
+allow_ufw_port() {
+  local port="$1"
+  local protocol="${2:-tcp}"
+
+  [[ "$port" =~ ^[0-9]+$ ]] || return 0
+  ufw allow "${port}/${protocol}" >/dev/null 2>&1 || true
+}
+
+delete_ufw_port() {
+  local port="$1"
+  local protocol="${2:-tcp}"
+
+  [[ "$port" =~ ^[0-9]+$ ]] || return 0
+  ufw --force delete allow "${port}/${protocol}" >/dev/null 2>&1 || true
+}
+
+allow_listening_ports() {
+  local protocol="$1"
+  local port=""
+
+  while IFS= read -r port; do
+    [[ -n "$port" ]] || continue
+    allow_ufw_port "$port" "$protocol"
+  done < <(list_listening_ports "$protocol")
+}
+
+ensure_ssh_ports_allowed() {
+  local port=""
+
+  while IFS= read -r port; do
+    [[ -n "$port" ]] || continue
+    allow_ufw_port "$port" "tcp"
+  done < <(list_ssh_ports)
+}
+
+ensure_managed_proxy_ports_allowed() {
+  local port=""
+
+  for port in "$(get_squid_port)" "$(get_dante_port)"; do
+    [[ "$port" == "N/A" ]] && continue
+    allow_ufw_port "$port" "tcp"
+  done
+}
+
+setup_ufw() {
+  local port="${1:-}"
+
+  if ! ufw_available; then
+    return 0
+  fi
+
+  # Перед включением UFW сохраняем доступ к SSH и уже работающим сервисам.
+  allow_listening_ports "tcp"
+  allow_listening_ports "udp"
+  ensure_ssh_ports_allowed
+  ensure_managed_proxy_ports_allowed
+
+  if [[ -n "$port" ]]; then
+    allow_ufw_port "$port" "tcp"
+  fi
+
+  if ! ufw_is_active; then
+    ufw --force enable
+  fi
+}
+
+port_is_reserved() {
+  local port="$1"
+  local ssh_port=""
+
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+
+  while IFS= read -r ssh_port; do
+    [[ "$ssh_port" == "$port" ]] && return 0
+  done < <(list_ssh_ports)
+
+  return 1
+}
+
+sync_managed_port() {
+  local old_port="$1"
+  local new_port="$2"
+  local service_name="$3"
+
+  if ! ufw_available; then
+    return 0
+  fi
+
+  setup_ufw "$new_port"
+
+  if [[ ! "$old_port" =~ ^[0-9]+$ || "$old_port" == "$new_port" ]]; then
+    return 0
+  fi
+
+  if port_is_reserved "$old_port"; then
+    return 0
+  fi
+
+  if [[ "$service_name" != "squid" && "$(get_squid_port)" == "$old_port" ]]; then
+    return 0
+  fi
+
+  if [[ "$service_name" != "dante" && "$(get_dante_port)" == "$old_port" ]]; then
+    return 0
+  fi
+
+  delete_ufw_port "$old_port" "tcp"
 }
 
 resolve_dante_service() {
@@ -429,15 +601,6 @@ ensure_dante_service() {
   service="$(resolve_dante_service)"
   systemctl enable "$service"
   systemctl restart "$service"
-}
-
-setup_ufw() {
-  local port="$1"
-
-  ufw --force enable
-  ufw default deny incoming
-  ufw default allow outgoing
-  ufw allow "$port/tcp"
 }
 
 wait_for_fail2ban() {
@@ -599,12 +762,14 @@ install_dante_flow() {
 }
 
 change_dante_port() {
-  local iface port
+  local old_port iface port
+  old_port="$(get_dante_port)"
   iface="$(get_iface)"
   port="$(read_port "Новый порт SOCKS5")"
 
   render_dante_conf "$iface" "$port"
-  ufw allow "$port/tcp" || true
+  sync_managed_port "$old_port" "$port" "dante"
+  setup_fail2ban "$port"
   local service
   service="$(resolve_dante_service)"
   systemctl restart "$service"
